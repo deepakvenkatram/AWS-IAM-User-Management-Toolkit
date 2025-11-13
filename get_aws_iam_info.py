@@ -41,6 +41,7 @@ import boto3
 import pandas as pd
 from io import BytesIO
 from datetime import datetime
+import time
 
 iam = boto3.client('iam')
 
@@ -54,8 +55,20 @@ def get_credential_report():
     # Generate report
     iam.generate_credential_report()
 
-    # Wait and fetch
-    report = iam.get_credential_report()
+    # Wait for the report to complete
+    print("⏳ Waiting for credential report to generate...")
+    while True:
+        try:
+            report = iam.get_credential_report()
+            # The report is ready if it has content or if the state is COMPLETE.
+            if 'Content' in report or report.get('State') == 'COMPLETE':
+                break
+        except iam.exceptions.CredentialReportNotReadyException:
+            # If the report is not ready, wait and try again.
+            pass
+        
+        time.sleep(2)
+
     csv_data = report['Content']
     df = pd.read_csv(BytesIO(csv_data))
     print("✅ Credential report retrieved successfully.")
@@ -153,10 +166,25 @@ def export_users_to_excel(filename='iam_user_roles_with_activity.xlsx'):
             all_details.append(details)
 
     df = pd.DataFrame(all_details)
+
+    # Columns that may contain datetimes
+    date_columns = [
+        'CreateDate', 'LastKeyUsed', 'PasswordLastUsed', 'PasswordLastChanged',
+        'LastConsoleLogin', 'AccessKey1LastUsed', 'AccessKey2LastUsed'
+    ]
+
+    for col in date_columns:
+        if col in df.columns:
+            # Convert column to datetime (UTC), coercing errors for non-date strings.
+            # This standardizes all date-like values into a consistent format.
+            df[col] = pd.to_datetime(df[col], errors='coerce', utc=True)
+            
+            # Remove the timezone to make it 'naive' for Excel compatibility.
+            df[col] = df[col].dt.tz_localize(None)
+
     df.to_excel(filename, index=False)
     print(f"\n✅ Detailed IAM user report with login activity saved to: {filename}")
 
 
 if __name__ == "__main__":
     export_users_to_excel()
-
